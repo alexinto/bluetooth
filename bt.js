@@ -1,5 +1,6 @@
 // Получение ссылок на элементы UI
 let connectButton = document.getElementById('connect');
+let connect2Button = document.getElementById('connect2');
 let disconnectButton = document.getElementById('disconnect');
 let terminalContainer = document.getElementById('terminal');
 let sendForm = document.getElementById('send-form');
@@ -8,6 +9,9 @@ let inputField = document.getElementById('input');
 // Подключение к устройству при нажатии на кнопку Connect
 connectButton.addEventListener('click', function() {
   connect();
+});
+connect2Button.addEventListener('click', function() {
+  connect_cc2541();
 });
 
 // Отключение от устройства при нажатии на кнопку Disconnect
@@ -34,12 +38,54 @@ function connect() {
       then(characteristic => startNotifications(characteristic)).
       catch(error => log(error));
 }
+function connect_cc2541() {
+  return (deviceCache ? Promise.resolve(deviceCache) :
+      requestBluetoothDevice_cc2541()).
+      then(device => connectDeviceAndCacheCharacteristic_cc2541(device)).
+      then(characteristic => startNotifications(characteristic)).
+      catch(error => log(error));
+}
 
 // Подключение к определенному устройству, получение сервиса и характеристики
 let characteristicCache = null;
+let characteristicWrCache = null;
 
 // Подключение к определенному устройству, получение сервиса и характеристики
 function connectDeviceAndCacheCharacteristic(device) {
+  if (device.gatt.connected && characteristicCache) {
+    return Promise.resolve(characteristicCache);
+  }
+
+  log('Connecting to GATT server...');
+  device.gatt.connect().
+	then(server => {
+	log('GATT server connected, getting service...');
+	return server.getPrimaryService(0xFFE0);
+	}).
+	then(service => {
+	log('Service found, getting characteristic...');
+	return service.getCharacteristic(0xFFE2);
+	}).
+	then(characteristic => {
+	log('Characteristic write found');
+	characteristicWrCache = characteristic;
+	return characteristicWrCache;
+	  });
+
+  return device.gatt.connect().
+      then(server => {
+        return server.getPrimaryService(0xFFE0);
+      }).
+      then(service => {
+        return service.getCharacteristic(0xFFE1);
+      }).
+      then(characteristic => {
+        log('Characteristic notification found');
+        characteristicCache = characteristic;
+        return characteristicCache;
+      });
+}
+function connectDeviceAndCacheCharacteristic_cc2541(device) {
   if (device.gatt.connected && characteristicCache) {
     return Promise.resolve(characteristicCache);
   }
@@ -50,12 +96,12 @@ function connectDeviceAndCacheCharacteristic(device) {
       then(server => {
         log('GATT server connected, getting service...');
 
-        return server.getPrimaryService(0xFFE0);
+        return server.getPrimaryService(0xFFF0);
       }).
       then(service => {
         log('Service found, getting characteristic...');
 
-        return service.getCharacteristic(0xFFE1);
+        return service.getCharacteristic(0xFFF4);
       }).
       then(characteristic => {
         log('Characteristic found');
@@ -76,6 +122,23 @@ function requestBluetoothDevice() {
 
   return navigator.bluetooth.requestDevice({
     filters: [{services: [0xFFE0]}],
+  }).
+      then(device => {
+        log('"' + device.name + '" bluetooth device selected');
+        deviceCache = device;
+
+        // Добавленная строка
+        deviceCache.addEventListener('gattserverdisconnected',
+            handleDisconnection);
+
+        return deviceCache;
+      });
+}
+function requestBluetoothDevice_cc2541() {
+  log('Requesting bluetooth device...');
+
+  return navigator.bluetooth.requestDevice({
+    filters: [{services: [0xFFF0]}],
   }).
       then(device => {
         log('"' + device.name + '" bluetooth device selected');
@@ -146,6 +209,7 @@ let readBuffer = '';
 // Получение данных
 function handleCharacteristicValueChanged(event) {
   let value = new TextDecoder().decode(event.target.value);
+  receive(value);
 
   for (let c of value) {
     if (c === '\n') {
@@ -171,30 +235,28 @@ function receive(data) {
 function send(data) {
   data = String(data);
 
-  if (!data || !characteristicCache) {
+  if (!data || !characteristicWrCache) {
     return;
   }
-
-  data += '\n';
 
   if (data.length > 20) {
     let chunks = data.match(/(.|[\r\n]){1,20}/g);
 
-    writeToCharacteristic(characteristicCache, chunks[0]);
+    writeToCharacteristic(characteristicWrCache, chunks[0]);
 
     for (let i = 1; i < chunks.length; i++) {
       setTimeout(() => {
-        writeToCharacteristic(characteristicCache, chunks[i]);
+        writeToCharacteristic(characteristicWrCache, chunks[i]);
       }, i * 100);
     }
   }
   else {
-    writeToCharacteristic(characteristicCache, data);
+    writeToCharacteristic(characteristicWrCache,data);
   }
-
+  
   log(data, 'out');
 }
 // Записать значение в характеристику
 function writeToCharacteristic(characteristic, data) {
-  characteristic.writeValue(new TextEncoder().encode(data));
+  characteristic.writeValue(new Uint8Array([58,7,1,4,0,-56,0,29]));
 }
